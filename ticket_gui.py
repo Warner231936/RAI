@@ -20,6 +20,8 @@ if os.path.exists(CONFIG_FILE):
     with open(CONFIG_FILE) as f:
         CONFIG = yaml.safe_load(f) or {}
 
+ONLINEMODE = CONFIG.get("onlinemode", 1)
+
 DATA_FILE = "ids.json"
 SERVER_URL = os.environ.get("SYNC_SERVER") or CONFIG.get("client", {}).get(
     "server_url", "https://localhost:1981"
@@ -36,7 +38,7 @@ ALT_DATABASE = {}
 RANKS = {}
 
 # Track sync status from server: green, yellow, or red
-SERVER_STATUS = "red"
+SERVER_STATUS = "red" if ONLINEMODE else "green"
 INTERACTIVE_WIDGETS = []
 backup_btn = None
 
@@ -254,6 +256,12 @@ def _zip_repository():
 
 
 def backup_to_server():
+    if not ONLINEMODE:
+        data = _zip_repository()
+        with open("backup_local.zip", "wb") as f:
+            f.write(data)
+        messagebox.showinfo("Backup", "Local backup saved to backup_local.zip.")
+        return
     if SERVER_STATUS != "green":
         messagebox.showwarning("Sync Error", "Cannot backup while sync is out of date.")
         return
@@ -268,6 +276,27 @@ def backup_to_server():
 
 
 def load_from_server():
+    if not ONLINEMODE:
+        if not os.path.exists("backup_local.zip"):
+            messagebox.showwarning("Restore", "No local backup found.")
+            return
+        try:
+            with zipfile.ZipFile("backup_local.zip", "r") as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    dest = info.filename
+                    server_mtime = time.mktime(info.date_time + (0, 0, -1))
+                    if os.path.exists(dest) and os.path.getmtime(dest) >= server_mtime:
+                        continue
+                    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                    with zf.open(info) as src, open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    os.utime(dest, (server_mtime, server_mtime))
+            messagebox.showinfo("Restore", "Local backup loaded.")
+        except Exception as exc:
+            messagebox.showerror("Restore Failed", str(exc))
+        return
     try:
         resp = SESSION.get(f"{SERVER_URL}/download", timeout=15)
         resp.raise_for_status()
@@ -292,12 +321,15 @@ def load_from_server():
 
 def on_close():
     """Backup to server before closing the application."""
-    if SERVER_STATUS == "green":
-        backup_to_server()
-    elif SERVER_STATUS == "yellow":
-        messagebox.showwarning("Out of Sync", "Backup skipped due to hash mismatch.")
+    if ONLINEMODE:
+        if SERVER_STATUS == "green":
+            backup_to_server()
+        elif SERVER_STATUS == "yellow":
+            messagebox.showwarning("Out of Sync", "Backup skipped due to hash mismatch.")
+        else:
+            messagebox.showerror("Sync Invalid", "Functions disabled due to invalid sync.")
     else:
-        messagebox.showerror("Sync Invalid", "Functions disabled due to invalid sync.")
+        backup_to_server()
     root.destroy()
 
 
@@ -489,5 +521,6 @@ root.protocol("WM_DELETE_WINDOW", on_close)
 
 update_stats()
 apply_server_status()
-root.after(0, load_from_server)  # Auto-download latest files and verify
+if ONLINEMODE:
+    root.after(0, load_from_server)  # Auto-download latest files and verify
 root.mainloop()
