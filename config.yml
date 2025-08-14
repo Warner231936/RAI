@@ -6,3 +6,4 @@ server:
 client:
   server_url: https://localhost:1981
   cert_file: server.crt
+onlinemode: 0
