@@ -1,3 +1,4 @@
+
 ## Dark Galaxy Command Box
 
 Run `ticket_gui.py` to launch the Dark Galaxy Command Box, a small Windows-friendly GUI for ticket submission and server management. The window sports a dark background with neon green text for a hacker vibe and a stats panel in the top-right showing how many main and alt IDs have been stored.
@@ -32,7 +33,20 @@ In the GUI, use the **Backup** button to upload all local files (excluding Git m
 - **yellow** – hashes differ but the backup is less than a day old; the client remains usable but skips automatic backups
 - **red** – hashes differ and the backup is stale; the GUI disables all functions
 
-The client verifies the server certificate, and you can override the default server URL by setting the `SYNC_SERVER` environment variable. When the GUI launches it pulls the latest files, verifies them, and only uploads a backup on exit if the server reports a green status.
+The client verifies the server certificate. Both scripts load settings from `config.yml` in the project root, letting you specify the server address, port, and certificate paths. For example:
+
+```
+server:
+  host: 0.0.0.0
+  port: 1981
+  cert: server.crt
+  key: server.key
+client:
+  server_url: https://localhost:1981
+  cert_file: server.crt
+```
+
+The `client.server_url` value may be overridden via the `SYNC_SERVER` environment variable. When the GUI launches it pulls the latest files, verifies them, and only uploads a backup on exit if the server reports a green status.
 
 ### Installation
 
@@ -42,3 +56,11 @@ For convenience, setup scripts are provided:
 - `install_server.sh` prepares a virtual environment with Flask for the backup server.
 
 Run the appropriate script and then launch `ticket_gui.py` or `sync_server.py` from the created `venv`.
+
+On Windows, equivalent batch scripts are provided:
+
+- `install_client.bat` sets up a virtual environment and installs the client dependencies.
+- `install_server.bat` prepares a virtual environment with Flask for the backup server.
+- `run_client.bat` launches the Dark Galaxy Command Box using the created environment.
+- `run_server.bat` starts the sync server using the created environment.
+
