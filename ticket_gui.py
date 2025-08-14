@@ -8,13 +8,23 @@ import tkinter as tk
 from tkinter import messagebox
 
 import requests
+import hashlib
+import yaml
 
 BG_COLOR = "#000000"
 FG_COLOR = "#00FF00"
 
+CONFIG_FILE = "config.yml"
+CONFIG = {}
+if os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE) as f:
+        CONFIG = yaml.safe_load(f) or {}
+
 DATA_FILE = "ids.json"
-SERVER_URL = os.environ.get("SYNC_SERVER", "https://localhost:1981")
-CERT_FILE = "server.crt"
+SERVER_URL = os.environ.get("SYNC_SERVER") or CONFIG.get("client", {}).get(
+    "server_url", "https://localhost:1981"
+)
+CERT_FILE = CONFIG.get("client", {}).get("cert_file", "server.crt")
 
 SESSION = requests.Session()
 SESSION.verify = CERT_FILE if os.path.exists(CERT_FILE) else True
@@ -24,6 +34,39 @@ ALT_DATABASE = {}
 
 # Mapping every known ID to its userRank
 RANKS = {}
+
+# Track sync status from server: green, yellow, or red
+SERVER_STATUS = "red"
+INTERACTIVE_WIDGETS = []
+backup_btn = None
+
+
+def apply_server_status():
+    global backup_btn
+    state = tk.DISABLED if SERVER_STATUS == "red" else tk.NORMAL
+    for w in INTERACTIVE_WIDGETS:
+        w.config(state=state)
+    if backup_btn is not None and SERVER_STATUS != "green":
+        backup_btn.config(state=tk.DISABLED)
+
+
+def verify_sync(data: bytes):
+    """Send SHA256 of downloaded data to server and update status."""
+    global SERVER_STATUS
+    sha = hashlib.sha256(data).hexdigest()
+    timestamp = time.time()
+    try:
+        resp = SESSION.post(
+            f"{SERVER_URL}/verify",
+            json={"hash": sha, "timestamp": timestamp},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        SERVER_STATUS = resp.json().get("status", "red")
+    except Exception as exc:
+        SERVER_STATUS = "red"
+        messagebox.showerror("Verification Failed", str(exc))
+    apply_server_status()
 
 
 class ToolTip:
@@ -211,6 +254,9 @@ def _zip_repository():
 
 
 def backup_to_server():
+    if SERVER_STATUS != "green":
+        messagebox.showwarning("Sync Error", "Cannot backup while sync is out of date.")
+        return
     try:
         data = _zip_repository()
         SESSION.post(
@@ -225,7 +271,8 @@ def load_from_server():
     try:
         resp = SESSION.get(f"{SERVER_URL}/download", timeout=15)
         resp.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        data = resp.content
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -237,6 +284,7 @@ def load_from_server():
                 with zf.open(info) as src, open(dest, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 os.utime(dest, (server_mtime, server_mtime))
+        verify_sync(data)
         messagebox.showinfo("Restore", "Backup loaded from server.")
     except Exception as exc:
         messagebox.showerror("Restore Failed", str(exc))
@@ -244,7 +292,12 @@ def load_from_server():
 
 def on_close():
     """Backup to server before closing the application."""
-    backup_to_server()
+    if SERVER_STATUS == "green":
+        backup_to_server()
+    elif SERVER_STATUS == "yellow":
+        messagebox.showwarning("Out of Sync", "Backup skipped due to hash mismatch.")
+    else:
+        messagebox.showerror("Sync Invalid", "Functions disabled due to invalid sync.")
     root.destroy()
 
 
@@ -316,9 +369,6 @@ root.configure(bg=BG_COLOR)
 # Load any previously saved IDs
 load_data()
 
-# Auto-download latest files from server at startup
-load_from_server()
-
 title_label = tk.Label(
     root, text="Dark Galaxy Command Box", bg=BG_COLOR, fg=FG_COLOR, font=("Helvetica", 16, "bold")
 )
@@ -331,6 +381,7 @@ stats_label.pack(anchor="ne", padx=10, pady=10)
 entry = tk.Entry(root, width=40, bg=BG_COLOR, fg=FG_COLOR, insertbackground=FG_COLOR)
 entry.pack(padx=10, pady=10)
 entry.focus_set()
+INTERACTIVE_WIDGETS.append(entry)
 
 # Send button
 send_button = tk.Button(
@@ -344,6 +395,7 @@ send_button = tk.Button(
     highlightbackground=FG_COLOR,
 )
 send_button.pack(padx=10, pady=(0, 10))
+INTERACTIVE_WIDGETS.append(send_button)
 
 # Load alts button
 load_button = tk.Button(
@@ -357,6 +409,7 @@ load_button = tk.Button(
     highlightbackground=FG_COLOR,
 )
 load_button.pack(padx=10, pady=(0, 10))
+INTERACTIVE_WIDGETS.append(load_button)
 
 # Commands dropdown and build button
 commands_frame = tk.Frame(root, bg=BG_COLOR)
@@ -375,6 +428,7 @@ command_menu.config(
 )
 command_menu["menu"].config(bg=BG_COLOR, fg=FG_COLOR)
 command_menu.pack(side="left", padx=5)
+INTERACTIVE_WIDGETS.append(command_menu)
 
 tooltip = ToolTip(command_menu, COMMAND_DESCRIPTIONS[command_var.get()])
 
@@ -384,7 +438,7 @@ def _update_tooltip(*args):
 
 command_var.trace_add("write", _update_tooltip)
 
-tk.Button(
+build_btn = tk.Button(
     commands_frame,
     text="Build",
     command=build_command,
@@ -393,13 +447,15 @@ tk.Button(
     activebackground=BG_COLOR,
     activeforeground=FG_COLOR,
     highlightbackground=FG_COLOR,
-).pack(side="left", padx=5)
+)
+build_btn.pack(side="left", padx=5)
+INTERACTIVE_WIDGETS.append(build_btn)
 
 # Backup and restore buttons
 backup_frame = tk.Frame(root, bg=BG_COLOR)
 backup_frame.pack(padx=10, pady=(0, 10))
 
-tk.Button(
+backup_btn = tk.Button(
     backup_frame,
     text="Backup",
     command=backup_to_server,
@@ -408,9 +464,11 @@ tk.Button(
     activebackground=BG_COLOR,
     activeforeground=FG_COLOR,
     highlightbackground=FG_COLOR,
-).pack(side="left", padx=5)
+)
+backup_btn.pack(side="left", padx=5)
+INTERACTIVE_WIDGETS.append(backup_btn)
 
-tk.Button(
+load_backup_btn = tk.Button(
     backup_frame,
     text="Load Backup",
     command=load_from_server,
@@ -419,7 +477,9 @@ tk.Button(
     activebackground=BG_COLOR,
     activeforeground=FG_COLOR,
     highlightbackground=FG_COLOR,
-).pack(side="left", padx=5)
+)
+load_backup_btn.pack(side="left", padx=5)
+INTERACTIVE_WIDGETS.append(load_backup_btn)
 
 # Bind Return key to send
 root.bind("<Return>", send_id)
@@ -428,4 +488,6 @@ root.bind("<Return>", send_id)
 root.protocol("WM_DELETE_WINDOW", on_close)
 
 update_stats()
+apply_server_status()
+root.after(0, load_from_server)  # Auto-download latest files and verify
 root.mainloop()
