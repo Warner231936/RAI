@@ -7,7 +7,9 @@ import requests
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 KOBOLD_URL = os.getenv("KOBOLD_URL", "http://localhost:5001")
+
 ASSIST_URL = os.getenv("KOBOLD_ASSIST_URL")  # optional smaller model
+
 
 BASE_DIR = Path(__file__).parent
 MEMORY_FILE = BASE_DIR / "memory.md"
@@ -18,6 +20,7 @@ if MEMORY_FILE.exists():
     GLOBAL_MEMORY = MEMORY_FILE.read_text()
 else:
     GLOBAL_MEMORY = ""
+
 
 # Load per-user data (history and emotion)
 if USER_MEMORY_FILE.exists():
@@ -40,6 +43,16 @@ def get_user_entry(user_id: int) -> dict:
     entry.setdefault("emotion", "neutral")
     return entry
 
+# Load per-user memories
+if USER_MEMORY_FILE.exists():
+    USER_MEMORIES = json.loads(USER_MEMORY_FILE.read_text())
+else:
+    USER_MEMORIES = {}
+
+def save_user_memories() -> None:
+    USER_MEMORY_FILE.write_text(json.dumps(USER_MEMORIES, indent=2))
+
+
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -48,6 +61,7 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+
 
 
 def assist_prompt(message: str) -> str:
@@ -82,10 +96,17 @@ def build_prompt(user_id: int, message: str) -> str:
     if hint:
         directives += f" [Hint: {hint}]"
     prompt = f"{GLOBAL_MEMORY}\n{directives}\n{history}User: {message}\nAI:"
+
+def build_prompt(user_id: int, message: str) -> str:
+    """Construct prompt with shared and per-user memory."""
+    history = "".join(USER_MEMORIES.get(str(user_id), []))
+    prompt = f"{GLOBAL_MEMORY}\n{history}User: {message}\nAI:"  # Use 'AI:' as the assistant marker
+
     return prompt
 
 
 def update_memory(user_id: int, user_msg: str, ai_msg: str) -> None:
+
     entry = get_user_entry(user_id)
     entry["history"].append(f"User: {user_msg}\nAI: {ai_msg}\n")
     save_user_data()
@@ -95,6 +116,11 @@ def set_emotion(user_id: int, emotion: str) -> None:
     entry = get_user_entry(user_id)
     entry["emotion"] = emotion
     save_user_data()
+
+    history = USER_MEMORIES.setdefault(str(user_id), [])
+    history.append(f"User: {user_msg}\nAI: {ai_msg}\n")
+    save_user_memories()
+
 
 
 def generate_response(prompt: str) -> str:
@@ -115,6 +141,7 @@ def generate_response(prompt: str) -> str:
 async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
         return
+
     content = message.content.strip()
 
     if content == "!forget":
@@ -148,6 +175,7 @@ async def on_message(message: discord.Message):
     if content == "!help":
         await message.channel.send("Commands: !forget, !reload, !emotion <mood>")
         return
+
 
     prompt = build_prompt(message.author.id, message.content)
     try:
