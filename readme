@@ -1,1 +1,14 @@
 base directory
+
+Discord KoboldCPP Bot
+---------------------
+This repo includes a Python Discord bot that connects to a local KoboldCPP instance
+running the Qwen2.5-14B-Instruct-Q5_K_M.gguf model on CUDA. The bot loads shared
+memory from `kobold_discord_bot/memory.md` and stores per-user conversation
+history in `kobold_discord_bot/user_memory.json`.
+
+Usage:
+1. Install dependencies: `pip install -r kobold_discord_bot/requirements.txt`.
+2. Start KoboldCPP with the desired model.
+3. Set environment variable `DISCORD_TOKEN` with your bot token.
+4. Run the bot: `python kobold_discord_bot/bot.py`.
