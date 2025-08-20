@@ -1,0 +1,15 @@
+{
+  "resources": {
+    "metal": "Primary construction material for ships and modules.",
+    "crystal": "Advanced resource used to craft high-grade equipment.",
+    "energy": "Fuel that powers ship systems and advanced technology."
+  },
+  "ships": {
+    "dreadnought": "Heavy battleship with massive defense and firepower.",
+    "frigate": "Light, fast ship for scouting and hit-and-run tactics."
+  },
+  "commanders": {
+    "nova": "Commander specializing in energy weapons and shield boosts.",
+    "terra": "Commander focused on armor and defensive tactics."
+  }
+}
