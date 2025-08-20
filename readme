@@ -19,6 +19,17 @@ Usage:
 6. To chat in a browser, run the web app: `python kobold_discord_bot/web_ui.py`
    and visit `http://localhost:8080`.
 
+history in `kobold_discord_bot/user_memory.json`.
+
+Usage:
+1. Install dependencies: `pip install -r kobold_discord_bot/requirements.txt`.
+2. Start KoboldCPP with the desired model.
+3. Set environment variable `DISCORD_TOKEN` with your bot token.
+
+4. Optionally set `KOBOLD_ASSIST_URL` to point to a smaller helper model.
+5. Run the bot: `python kobold_discord_bot/bot.py`.
+
+
 Commands:
 - `!forget` – clear your saved conversation history.
 - `!reload` – reload the shared memory file (admin only).
@@ -29,3 +40,5 @@ Commands:
 Set `KOBOLD_ASSIST_URL` to point to a second, smaller KoboldCPP model. The bot will
 query this model for short emotional hints to feed into the main model, giving the
 Requiem persona more expressive variance in its replies.
+
+4. Run the bot: `python kobold_discord_bot/bot.py`.
