@@ -1,5 +1,3 @@
-base directory
-
 Discord KoboldCPP Bot
 ---------------------
 This repo includes a Python Discord bot that connects to a local KoboldCPP instance
@@ -7,6 +5,7 @@ running the Qwen2.5-14B-Instruct-Q5_K_M.gguf model on CUDA. The bot loads shared
 memory from `kobold_discord_bot/memory.md` and stores per-user conversation
 history in `kobold_discord_bot/user_memory.json`. The same storage is used by a
 simple web interface so multiple users can chat with Requiem concurrently.
+
 
 A lightweight Galaxy Online 2 knowledge base lives in `kobold_discord_bot/go2_data.json`.
 Requiem automatically searches this file for relevant facts when building a
@@ -30,14 +29,16 @@ Usage:
    to the user's language for the final reply, enabling multilingual chats.
 8. A background memory manager periodically summarizes older dialogue to keep
    per-user histories short and reduce load.
-   
+
 Commands:
 - `!helpme` – list available commands.
 - `!forget` – clear your saved conversation history.
 - `!reload` – reload the shared memory file (admin only).
 - `!emotion <mood>` – set or view your preferred emotional tone.
 - `!img <prompt>` – generate an image via AUTOMATIC1111 and post it.
+
 - `!go2 <text>` – lookup Galaxy Online 2 information from the built-in database.
+
 - `!memoryfile` / `!memoryhere` – DM or post the exported memory file.
 - `!anchors` – show top anchors from the exported memory file.
 - `!memfind <text>` – search the exported memory file for text.
@@ -60,9 +61,43 @@ message.
 Provide URLs for the three models via `INTENT_URL`, `THOUGHTS_URL` and
 `KOBOLD_URL` if you run them separately. The helper models keep Requiem
 responsive while supporting multiple simultaneous users.
+5. Run the Discord bot: `python kobold_discord_bot/bot.py`.
+6. To chat in a browser, run the web app: `python kobold_discord_bot/web_ui.py`
+   and visit `http://localhost:8080`.
+
+history in `kobold_discord_bot/user_memory.json`.
+
+Usage:
+1. Install dependencies: `pip install -r kobold_discord_bot/requirements.txt`.
+2. Start KoboldCPP with the desired model.
+3. Set environment variable `DISCORD_TOKEN` with your bot token.
+
+4. Optionally set `KOBOLD_ASSIST_URL` to point to a smaller helper model.
+5. Run the bot: `python kobold_discord_bot/bot.py`.
+
+
+Commands:
+- `!forget` – clear your saved conversation history.
+- `!reload` – reload the shared memory file (admin only).
+- `!emotion <mood>` – set or view your preferred emotional tone.
+- `!help` – list available commands.
+
+
+### Optional assistant model
+Set `KOBOLD_ASSIST_URL` to point to a second, smaller KoboldCPP model. The bot will
+query this model for short emotional hints to feed into the main model, giving the
+Requiem persona more expressive variance in its replies.
+
+
 
 ### Performance tuning
 Environment variables:
 
 - `MAX_WORKERS` – max concurrent requests handled by the bot and web UI.
 - `HTTP_TIMEOUT` – seconds to wait for model/image servers before giving up.
+
+
+
+4. Run the bot: `python kobold_discord_bot/bot.py`.
+
+

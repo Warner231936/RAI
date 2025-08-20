@@ -1,8 +1,14 @@
 """Helper to launch KoboldCPP engines for Requiem.
 
+
 This script spawns the primary KoboldCPP model along with optional
 smaller models used for intent classification and planning. All models
 are launched on CUDA via the `koboldcpp` command.
+
+This script spawns one primary KoboldCPP process and, optionally, a
+secondary process used for emotional hinting. It expects the `koboldcpp`
+command to be available in the environment.
+
 """
 
 from __future__ import annotations
@@ -37,6 +43,12 @@ def main() -> None:
         procs.append(launch(intent_model, intent_port))
     if planner_model:
         procs.append(launch(planner_model, planner_port))
+    assist_model = os.getenv("ASSIST_MODEL")
+    assist_port = int(os.getenv("ASSIST_PORT", "5002"))
+
+    procs = [launch(model, port)]
+    if assist_model:
+        procs.append(launch(assist_model, assist_port))
 
     for p in procs:
         p.wait()

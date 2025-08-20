@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import asyncio
 from base64 import b64encode
 from typing import Any, Dict
@@ -23,7 +24,9 @@ from core import (
 from orchestrator import Orchestrator
 
 
+
 app = Flask(__name__)
+
 
 _LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(_LOOP)
@@ -37,9 +40,11 @@ INDEX_HTML = """
 <div id="log" style="height:300px; overflow-y:auto; border:1px solid #ccc; padding:5px;"></div>
 <input id="user" placeholder="username"> <input id="msg" placeholder="message">
 <button onclick="send()">Send</button>
+
 <br>
 <input id="imgprompt" placeholder="image prompt">
 <button onclick="img()">Image</button>
+
 <script>
 async function send(){
   const user=document.getElementById('user').value;
@@ -52,6 +57,7 @@ async function send(){
   log.scrollTop=log.scrollHeight;
   document.getElementById('msg').value='';
 }
+
 async function img(){
   const prompt=document.getElementById('imgprompt').value;
   const res=await fetch('/img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt})});
@@ -65,6 +71,7 @@ async function img(){
   log.scrollTop=log.scrollHeight;
   document.getElementById('imgprompt').value='';
 }
+
 </script>
 """
 
@@ -81,6 +88,7 @@ def chat():
     message = data.get("message")
     if not user or not message:
         return jsonify({"error": "user and message required"}), 400
+
 
     entry = get_user_entry(user)
     lang = detect_language(message)
@@ -117,6 +125,16 @@ def img():
     except Exception as exc:  # pragma: no cover - network errors
         return jsonify({"error": str(exc)}), 500
     return jsonify({"image": b64encode(png).decode("ascii")})
+
+    prompt = build_prompt(user, message)
+    try:
+        reply = generate_response(prompt)
+    except Exception as exc:  # pragma: no cover - network errors
+        return jsonify({"error": str(exc)}), 500
+
+    update_memory(user, message, reply)
+    return jsonify({"reply": reply})
+
 
 
 if __name__ == "__main__":
