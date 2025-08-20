@@ -126,15 +126,6 @@ def img():
         return jsonify({"error": str(exc)}), 500
     return jsonify({"image": b64encode(png).decode("ascii")})
 
-    prompt = build_prompt(user, message)
-    try:
-        reply = generate_response(prompt)
-    except Exception as exc:  # pragma: no cover - network errors
-        return jsonify({"error": str(exc)}), 500
-
-    update_memory(user, message, reply)
-    return jsonify({"reply": reply})
-
 
 
 if __name__ == "__main__":
