@@ -1,3 +1,25 @@
+
+"""Discord interface for the Requiem AI."""
+
+import os
+
+import discord
+
+from core import (
+    USER_DATA,
+    MEMORY_FILE,
+    build_prompt,
+    generate_response,
+    get_user_entry,
+    reload_global_memory,
+    save_user_data,
+    set_emotion,
+    update_memory,
+)
+
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+
 import os
 import json
 from pathlib import Path
@@ -61,6 +83,7 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+
 
 
 
@@ -137,10 +160,13 @@ def generate_response(prompt: str) -> str:
     return resp.json()["results"][0]["text"].strip()
 
 
+
 @client.event
 async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
         return
+
+
 
     content = message.content.strip()
 
@@ -152,9 +178,14 @@ async def on_message(message: discord.Message):
 
     if content == "!reload":
         if getattr(message.author, "guild_permissions", None) and message.author.guild_permissions.administrator:
+
+            if MEMORY_FILE.exists():
+                reload_global_memory()
+
             global GLOBAL_MEMORY
             if MEMORY_FILE.exists():
                 GLOBAL_MEMORY = MEMORY_FILE.read_text()
+
                 await message.channel.send("Shared memory reloaded.")
             else:
                 await message.channel.send("Memory file not found.")
@@ -192,3 +223,4 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN not set")
     client.run(TOKEN)
+
