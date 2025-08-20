@@ -10,8 +10,6 @@ generation settings while handling concurrent access from multiple users.
 """
 
 from __future__ import annotations
-
-
 import base64
 import json
 import os
@@ -19,10 +17,11 @@ import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from langdetect import detect, LangDetectException
+from deep_translator import GoogleTranslator
 
 # Environment configuration -------------------------------------------------
 
@@ -30,6 +29,13 @@ KOBOLD_URL = os.getenv("KOBOLD_URL", "http://localhost:5001").rstrip("/")
 ASSIST_URL = os.getenv("KOBOLD_ASSIST_URL", "").rstrip("/")
 SD_URL = os.getenv("SD_URL", "http://localhost:7860").rstrip("/")
 
+BASE_DIR = Path(__file__).parent
+MEMORY_FILE = BASE_DIR / "memory.md"
+USER_MEMORY_FILE = BASE_DIR / "user_memory.json"
+MEM_EXPORT_PATH = Path(
+    os.getenv("MEM_EXPORT_PATH", str(BASE_DIR / "Requiem_Memory_Export.md"))
+)
+GO2_DATA_FILE = BASE_DIR / "go2_data.json"
 import json
 import os
 import threading
@@ -74,15 +80,30 @@ _ADAPTER = HTTPAdapter(
 _SESSION.mount("http://", _ADAPTER)
 _SESSION.mount("https://", _ADAPTER)
 
-
 _LOCK = threading.Lock()
-
-
 
 # ---------------------------------------------------------------------------
 # Persistent storage helpers
 
 def _load_global_memory() -> str:
+    return MEMORY_FILE.read_text(encoding="utf-8") if MEMORY_FILE.exists() else ""
+
+
+GLOBAL_MEMORY = _load_global_memory()
+
+
+def _load_go2_data() -> Dict[str, Any]:
+    return (
+        json.loads(GO2_DATA_FILE.read_text(encoding="utf-8"))
+        if GO2_DATA_FILE.exists()
+        else {}
+    )
+
+
+GO2_DATA = _load_go2_data()
+
+if USER_MEMORY_FILE.exists():
+    USER_DATA: Dict[str, Any] = json.loads(USER_MEMORY_FILE.read_text(encoding="utf-8"))
 
     return MEMORY_FILE.read_text(encoding="utf-8") if MEMORY_FILE.exists() else ""
     return MEMORY_FILE.read_text() if MEMORY_FILE.exists() else ""
@@ -111,6 +132,9 @@ def save_user_data() -> None:
 def get_user_entry(user_id: Any) -> Dict[str, Any]:
     """Return user data; migrate legacy formats if needed."""
 
+    uid = str(user_id)
+    with _LOCK:
+        entry = USER_DATA.setdefault(uid, {"history": [], "emotion": "neutral"})
         USER_MEMORY_FILE.write_text(json.dumps(USER_DATA, indent=2))
 
 
@@ -128,6 +152,8 @@ def get_user_entry(user_id: Any) -> Dict[str, Any]:
             USER_DATA[uid] = entry
     entry.setdefault("history", [])
     entry.setdefault("emotion", "neutral")
+    entry.setdefault("summary", "")
+
 
     # Migrate legacy string history ("User:...\nAI:...")
     hist = entry["history"]
@@ -173,6 +199,52 @@ def set_emotion(user_id: Any, emotion: str) -> None:
     save_user_data()
 
 
+def _summarize_history(entry: Dict[str, Any], keep: int = 40) -> None:
+    """Summarize older conversation turns to keep history compact."""
+
+    hist = entry.get("history", [])
+    if len(hist) <= keep * 2:
+        return
+    old = hist[:-keep]
+    convo = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in old)
+    payload = {
+        "prompt": (
+            "Summarize the following conversation, highlighting facts to remember for future chats.\n\n"
+            f"{convo}\n\nSummary:"
+        ),
+        "max_context_length": 2048,
+        "max_length": 120,
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "stop_sequence": ["\n"],
+        "frmttriminc": True,
+    }
+    try:  # pragma: no cover - network call
+        with _SEMAPHORE:
+            resp = _SESSION.post(
+                f"{KOBOLD_URL}/api/v1/generate", json=payload, timeout=HTTP_TIMEOUT
+            )
+        resp.raise_for_status()
+        js = resp.json()
+        summary = (js.get("results", [{}])[0].get("text") or "").strip()
+    except Exception:
+        summary = ""
+    with _LOCK:
+        prev = entry.get("summary", "")
+        if summary:
+            entry["summary"] = (prev + "\n" + summary).strip() if prev else summary
+        entry["history"] = hist[-keep:]
+
+
+def update_memory(user_id: Any, user_msg: str, ai_msg: str) -> None:
+    entry = get_user_entry(user_id)
+    with _LOCK:
+        entry["history"].append({"role": "user", "content": user_msg})
+        entry["history"].append({"role": "assistant", "content": ai_msg})
+    _summarize_history(entry)
+    with _LOCK:
+        if len(entry["history"]) > 200:
+            entry["history"] = entry["history"][-200:]
 def update_memory(user_id: Any, user_msg: str, ai_msg: str) -> None:
     entry = get_user_entry(user_id)
     with _LOCK:
@@ -194,6 +266,42 @@ def reload_global_memory() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge base helpers
+
+
+def lookup_go2(message: str, max_items: int = 3) -> str:
+    """Return relevant Galaxy Online 2 facts for a user message."""
+
+    if not GO2_DATA:
+        return ""
+    words = set(re.findall(r"\w+", message.lower()))
+    if not words:
+        return ""
+    hits: list[str] = []
+    for cat, items in GO2_DATA.items():
+        if not isinstance(items, dict):
+            continue
+        for name, info in items.items():
+            text = f"{name} {info}".lower()
+            if any(w in text for w in words):
+                hits.append(f"{name.title()} ({cat}): {info}")
+                if len(hits) >= max_items:
+                    return "\n".join(hits)
+    return "\n".join(hits)
+
+
+# ---------------------------------------------------------------------------
+# Generation helpers
+
+def assist_hint(user_message: str) -> str:
+    if not ASSIST_URL:
+        return ""
+
+    payload = {
+        "prompt": (
+            "Given the user message below, suggest a short emotional/style hint to help the main assistant "
+            "respond with more feeling (5-10 words, no quotes).\n"
+            f"Message: {user_message}\nHint:"
 # Generation helpers
 
 
@@ -234,9 +342,38 @@ def assist_prompt(message: str) -> str:
         resp = requests.post(f"{ASSIST_URL}/api/v1/generate", json=payload, timeout=60)
         resp.raise_for_status()
         return resp.json()["results"][0]["text"].strip()
+
     except Exception:
         return ""
 
+
+# ---------------------------------------------------------------------------
+# Multilingual helpers
+
+def detect_language(text: str) -> str:
+    """Detect the ISO 639-1 language code of ``text``.
+
+    Defaults to ``"en"`` if detection fails.
+    """
+
+    try:
+        return detect(text)
+    except LangDetectException:  # pragma: no cover - nondeterministic
+        return "en"
+
+
+def translate_text(text: str, src: str, dest: str) -> str:
+    """Translate ``text`` from ``src`` language to ``dest``.
+
+    Falls back to ``text`` unchanged on errors or if languages match.
+    """
+
+    if src == dest:
+        return text
+    try:  # pragma: no cover - network call
+        return GoogleTranslator(source=src, target=dest).translate(text)
+    except Exception:
+        return text
 
 
 def chatml_format(messages: List[Dict[str, str]]) -> str:
@@ -256,6 +393,13 @@ def build_prompt(user_id: Any, message: str, hint: str = "") -> str:
     sys_lines = [SYSTEM_PROMPT]
     if GLOBAL_MEMORY:
         sys_lines.append("\n# Shared Memory\n" + GLOBAL_MEMORY.strip())
+    summary = entry.get("summary")
+    if summary:
+        sys_lines.append("\n# Conversation Summary\n" + summary.strip())
+    kb_hits = lookup_go2(message)
+    if kb_hits:
+        sys_lines.append("\n# Galaxy Online 2\n" + kb_hits)
+
     sys_lines.append(f"\n[Emotion: {emotion}]")
     if hint:
         sys_lines.append(f"[Hint: {hint}]")
@@ -269,6 +413,7 @@ def build_prompt(user_id: Any, message: str, hint: str = "") -> str:
     messages = hist_msgs + [{"role": "user", "content": message}]
     return chatml_format([system] + messages)
 
+
 def build_prompt(user_id: Any, message: str) -> str:
     """Construct prompt with shared and per-user memory."""
 
@@ -281,6 +426,7 @@ def build_prompt(user_id: Any, message: str) -> str:
         directives += f" [Hint: {hint}]"
     prompt = f"{GLOBAL_MEMORY}\n{directives}\n{history}User: {message}\nAI:"
     return prompt
+
 
 
 
@@ -333,6 +479,7 @@ __all__ = [
     "ASSIST_URL",
     "BASE_DIR",
     "GLOBAL_MEMORY",
+    "SYSTEM_PROMPT",
     "KOBOLD_URL",
     "MEMORY_FILE",
     "MEM_EXPORT_PATH",
@@ -345,10 +492,15 @@ __all__ = [
     "generate_response",
     "get_user_entry",
     "reload_global_memory",
+    "lookup_go2",
     "save_user_data",
     "set_emotion",
     "txt2img",
     "update_memory",
+    "detect_language",
+    "translate_text",
+]
+
 ]
 
         "max_context_length": 2048,

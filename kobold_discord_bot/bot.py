@@ -1,9 +1,13 @@
 
 """Discord interface for the Requiem AI."""
-
+from __future__ import annotations
+"""Discord interface for the Requiem AI."""
 import asyncio
 import os
-
+import aiohttp
+import discord
+from discord.ext import commands
+import core
 import discord
 from discord.ext import commands
 
@@ -12,6 +16,19 @@ from core import (
     MEM_EXPORT_PATH,
     MEMORY_FILE,
     USER_DATA,
+    SYSTEM_PROMPT,
+    detect_language,
+    get_user_entry,
+    lookup_go2,
+    reload_global_memory,
+    save_user_data,
+    set_emotion,
+    translate_text,
+    txt2img,
+    update_memory,
+)
+from orchestrator import Orchestrator
+
     assist_hint,
 
 """Discord interface for the Requiem AI."""
@@ -34,6 +51,7 @@ from core import (
 )
 
 
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
@@ -41,6 +59,18 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 GENERATION_SEMAPHORE = asyncio.Semaphore(MAX_WORKERS)
+
+
+_SESSION: aiohttp.ClientSession | None = None
+ORCH: Orchestrator | None = None
+
+
+@bot.event
+async def on_ready():
+    global _SESSION, ORCH
+    if _SESSION is None or _SESSION.closed:
+        _SESSION = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300))
+    ORCH = Orchestrator(SYSTEM_PROMPT, core.GLOBAL_MEMORY, _SESSION)
 
 
 @bot.event
@@ -51,6 +81,8 @@ async def on_ready():
 @bot.command(name="helpme")
 async def helpme(ctx: commands.Context) -> None:
     await ctx.reply(
+
+        "Commands: !forget, !reload, !emotion <mood>, !img <prompt>, !go2 <text>, !memoryfile, !memoryhere, !anchors, !memfind <text>\n"
         "Commands: !forget, !reload, !emotion <mood>, !img <prompt>, !memoryfile, !memoryhere, !anchors, !memfind <text>\n"
         "Talk to me by mentioning me or just typing—I'll answer here."
     )
@@ -68,6 +100,8 @@ async def forget(ctx: commands.Context) -> None:
 async def reload_cmd(ctx: commands.Context) -> None:
     if MEMORY_FILE.exists():
         reload_global_memory()
+        if ORCH:
+            ORCH.gmem = core.GLOBAL_MEMORY
         await ctx.reply("Shared memory reloaded.")
     else:
         await ctx.reply("memory.md not found.")
@@ -103,6 +137,16 @@ async def img_cmd(ctx: commands.Context, *, prompt: str = "") -> None:
         file=discord.File(fp=bytes(png), filename="image.png"),
     )
 
+
+@bot.command(name="go2")
+async def go2_cmd(ctx: commands.Context, *, q: str = "") -> None:
+    if not q:
+        return await ctx.reply("Usage: `!go2 <text>`")
+    hits = lookup_go2(q, max_items=5)
+    if not hits:
+        await ctx.reply(f"No info for **{q}**")
+    else:
+        await ctx.reply(f"**GO2 Info:**\n{hits}")
 
 @bot.command(name="memoryfile")
 async def memoryfile_cmd(ctx: commands.Context) -> None:
@@ -173,6 +217,38 @@ async def on_message(message: discord.Message) -> None:
     if content.startswith("!"):
         return
 
+    if ORCH is None:
+        return await message.channel.send("Model not ready")
+
+    await message.channel.typing()
+    entry = get_user_entry(message.author.id)
+    lang = detect_language(content)
+    content_en = translate_text(content, lang, "en")
+    kb = lookup_go2(content_en)
+    async with GENERATION_SEMAPHORE:
+        try:
+            result = await ORCH.handle(
+                message.author.id,
+                entry["history"],
+                content_en,
+                kb,
+                entry.get("summary", ""),
+            )
+        except Exception as exc:  # pragma: no cover - network errors
+            return await message.channel.send(f"Error: {exc}")
+    reply_en = result.final
+    reply = translate_text(reply_en, "en", lang)
+    update_memory(message.author.id, content_en, reply_en)
+    for chunk in (reply[i : i + 1900] for i in range(0, len(reply), 1900)):
+        await message.channel.send(chunk)
+    if result.intent.flags.get("needs_image"):
+        async with GENERATION_SEMAPHORE:
+            try:
+                png = await asyncio.to_thread(txt2img, content)
+            except Exception as exc:  # pragma: no cover - network errors
+                await message.channel.send(f"Image error: {exc}")
+            else:
+                await message.channel.send(file=discord.File(fp=bytes(png), filename="image.png"))
     await message.channel.typing()
     async with GENERATION_SEMAPHORE:
         hint = await asyncio.to_thread(assist_hint, content)
@@ -387,9 +463,7 @@ async def on_message(message: discord.Message):
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN not set")
-
     bot.run(TOKEN)
 
+
     client.run(TOKEN)
-
-
